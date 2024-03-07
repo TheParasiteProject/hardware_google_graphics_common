@@ -18,7 +18,7 @@
 #include <sync/sync.h>
 #include "exynos_sync.h"
 
-int32_t saveErrorLog(const String8 &errString, ExynosDisplay *display) {
+int32_t saveErrorLog(const String8& errString, const ExynosDisplay* display) {
     if (display == nullptr) return -1;
     int32_t ret = NO_ERROR;
 
@@ -32,8 +32,8 @@ int32_t saveErrorLog(const String8 &errString, ExynosDisplay *display) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
 
-    saveString.appendFormat("%s errFrameNumber %" PRIu64 ": %s\n", getLocalTimeStr(tv).string(),
-                            display->mErrorFrameCount, errString.string());
+    saveString.appendFormat("%s errFrameNumber %" PRIu64 ": %s\n", getLocalTimeStr(tv).c_str(),
+                            display->mErrorFrameCount, errString.c_str());
 
     fileWriter.write(saveString);
     fileWriter.flush();

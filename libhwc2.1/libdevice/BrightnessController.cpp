@@ -156,10 +156,10 @@ BrightnessController::~BrightnessController() {
     }
 }
 
-void BrightnessController::updateBrightnessTable(const IBrightnessTable* table) {
+void BrightnessController::updateBrightnessTable(std::unique_ptr<const IBrightnessTable>& table) {
     if (table && table->GetBrightnessRange(BrightnessMode::BM_NOMINAL)) {
         ALOGI("%s: apply brightness table from libdisplaycolor", __func__);
-        mBrightnessTable = table;
+        mBrightnessTable = std::move(table);
     } else {
         ALOGW("%s: table is not valid!", __func__);
     }
@@ -181,9 +181,9 @@ void BrightnessController::updateBrightnessTable(const IBrightnessTable* table) 
     String8 nodeName;
     nodeName.appendFormat(kDimBrightnessFileNode, mPanelIndex);
 
-    std::ifstream ifsDimBrightness(nodeName.string());
+    std::ifstream ifsDimBrightness(nodeName.c_str());
     if (ifsDimBrightness.fail()) {
-        ALOGW("%s fail to open %s", __func__, nodeName.string());
+        ALOGW("%s fail to open %s", __func__, nodeName.c_str());
     } else {
         ifsDimBrightness >> mDimBrightness;
         ifsDimBrightness.close();
@@ -210,11 +210,12 @@ void BrightnessController::initDimmingUsage() {
     String8 propName;
     propName.appendFormat(kDimmingUsagePropName, mPanelIndex);
 
-    mBrightnessDimmingUsage = static_cast<BrightnessDimmingUsage>(property_get_int32(propName, 0));
+    mBrightnessDimmingUsage =
+            static_cast<BrightnessDimmingUsage>(property_get_int32(propName.c_str(), 0));
 
     propName.clear();
     propName.appendFormat(kDimmingHbmTimePropName, mPanelIndex);
-    mHbmDimmingTimeUs = property_get_int32(propName, kHbmDimmingTimeUs);
+    mHbmDimmingTimeUs = property_get_int32(propName.c_str(), kHbmDimmingTimeUs);
 
     if (mBrightnessDimmingUsage == BrightnessDimmingUsage::NORMAL) {
         mDimming.store(true);
@@ -229,18 +230,18 @@ void BrightnessController::initDimmingUsage() {
 void BrightnessController::initBrightnessSysfs() {
     String8 nodeName;
     nodeName.appendFormat(BRIGHTNESS_SYSFS_NODE, mPanelIndex);
-    mBrightnessOfs.open(nodeName.string(), std::ofstream::out);
+    mBrightnessOfs.open(nodeName.c_str(), std::ofstream::out);
     if (mBrightnessOfs.fail()) {
-        ALOGE("%s %s fail to open", __func__, nodeName.string());
+        ALOGE("%s %s fail to open", __func__, nodeName.c_str());
         return;
     }
 
     nodeName.clear();
     nodeName.appendFormat(MAX_BRIGHTNESS_SYSFS_NODE, mPanelIndex);
 
-    std::ifstream ifsMaxBrightness(nodeName.string());
+    std::ifstream ifsMaxBrightness(nodeName.c_str());
     if (ifsMaxBrightness.fail()) {
-        ALOGE("%s fail to open %s", __func__, nodeName.string());
+        ALOGE("%s fail to open %s", __func__, nodeName.c_str());
         return;
     }
 
@@ -249,9 +250,9 @@ void BrightnessController::initBrightnessSysfs() {
 
     nodeName.clear();
     nodeName.appendFormat(kGlobalAclModeFileNode, mPanelIndex);
-    mAclModeOfs.open(nodeName.string(), std::ofstream::out);
+    mAclModeOfs.open(nodeName.c_str(), std::ofstream::out);
     if (mAclModeOfs.fail()) {
-        ALOGI("%s %s not supported", __func__, nodeName.string());
+        ALOGI("%s %s not supported", __func__, nodeName.c_str());
     } else {
         String8 propName;
         propName.appendFormat(kAclModeDefaultPropName, mPanelIndex);
@@ -268,9 +269,9 @@ void BrightnessController::initCabcSysfs() {
     String8 nodeName;
     nodeName.appendFormat(kLocalCabcModeFileNode, mPanelIndex);
 
-    mCabcModeOfs.open(nodeName.string(), std::ofstream::out);
+    mCabcModeOfs.open(nodeName.c_str(), std::ofstream::out);
     if (mCabcModeOfs.fail()) {
-        ALOGE("%s %s fail to open", __func__, nodeName.string());
+        ALOGE("%s %s fail to open", __func__, nodeName.c_str());
         return;
     }
 }
@@ -303,7 +304,7 @@ void BrightnessController::initBrightnessTable(const DrmDevice& drmDevice,
             reinterpret_cast<struct brightness_capability *>(blob->data);
     mKernelBrightnessTable.Init(cap);
     if (mKernelBrightnessTable.IsValid()) {
-        mBrightnessTable = &mKernelBrightnessTable;
+        mBrightnessTable = std::make_unique<LinearBrightnessTable>(mKernelBrightnessTable);
     }
 
     parseHbmModeEnums(connector.hbm_mode());
@@ -342,6 +343,14 @@ int BrightnessController::updateAclMode() {
         mAclMode.store(mAclModeDefault);
     }
 
+    if (applyAclViaSysfs() == HWC2_ERROR_NO_RESOURCES)
+        ALOGW("%s try to apply acl_mode when brightness changed", __func__);
+
+    return NO_ERROR;
+}
+
+int BrightnessController::applyAclViaSysfs() {
+    if (!mAclModeOfs.is_open()) return NO_ERROR;
     if (!mAclMode.is_dirty()) return NO_ERROR;
 
     mAclModeOfs.seekp(std::ios_base::beg);
@@ -375,6 +384,11 @@ int BrightnessController::processDisplayBrightness(float brightness, const nsecs
     }
 
     ATRACE_CALL();
+
+    /* update ACL */
+    if (applyAclViaSysfs() == HWC2_ERROR_NO_RESOURCES)
+        ALOGE("%s failed to apply acl_mode", __func__);
+
     if (!mBrightnessIntfSupported) {
         level = brightness < 0 ? 0 : static_cast<uint32_t>(brightness * mMaxBrightness + 0.5f);
         return applyBrightnessViaSysfs(level);
